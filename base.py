@@ -2,6 +2,7 @@
 import yfinance as yf
 import pandas as pd
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 import datetime
 import time
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
@@ -57,43 +58,68 @@ class Stock:
         driver = webdriver.Chrome("driver/chromedriver")
         driver.get(url)
 
-        time.sleep(5)
-
-        total_tabs = driver.find_element_by_xpath("/html/body/div[3]/div/main/div[2]/div[4]/div[3]/div/div[1]/div/div[1]/div[3]/div/button[8]").text
+        attempts = 0
+        while attempts < 20:
+            try:
+                time.sleep(5)
+                total_tabs = driver.find_element(by=By.XPATH, value="/html/body/div[3]/div/main/div[2]/div[4]/div[3]/div/div[1]/div/div[1]/div[3]/div/button[8]").text
+                break
+            except:
+                attempts += 1
         total_tabs = int(total_tabs)
         print("total tabs: {}".format(total_tabs))
 
         self.headlines = [["Date", "Headline"]]
 
         for i in range(total_tabs):
-            time.sleep(2)
-            print("scraping tab {}".format(i+1))
-            current_page_list = driver.find_element_by_xpath("/html/body/div[3]/div/main/div[2]/div[4]/div[3]/div/div[1]/div/div[1]/ul")
-            options = current_page_list.find_elements_by_tag_name("li")
-            for headline in options:
-                headline_text = headline.text.split("\n")
-                if "HOURS" in headline_text[0]:
-                    post_time = now-datetime.timedelta(hours=int(headline_text[0].split(" ")[0]))
-                    headline_text[0] = post_time.strftime("%m/%d/%Y")
-                elif "DAY" in headline_text[0]:
-                    post_time = now-datetime.timedelta(days=int(headline_text[0].split(" ")[0]))
-                    headline_text[0] = post_time.strftime("%m/%d/%Y")
-                elif "MIN" in headline_text[0]:
-                    post_time = now-datetime.timedelta(minutes=int(headline_text[0].split(" ")[0]))
-                    headline_text[0] = post_time.strftime("%m/%d/%Y")
-                elif "HOUR" in headline_text[0]:
-                    post_time = now-datetime.timedelta(hours=int(headline_text[0].split(" ")[0]))
-                    headline_text[0] = post_time.strftime("%m/%d/%Y")
-                else:
-                    post_time = headline_text[0].split(" ")
-                    post_time_full = str(DATES[post_time[0]])+"/"
-                    post_time_full += str(post_time[1]).replace(",","")+"/"
-                    post_time_full += str(post_time[2])
-                    headline_text[0] = post_time_full
-                
-                self.headlines.append(headline_text)
+            results = False
+            attempts = 0
+            while attempts < 20:
+                try:
+                    time.sleep(0.5)
+                    print("scraping tab {}".format(i+1))
+                    current_page_list = driver.find_element(by=By.XPATH, value="/html/body/div[3]/div/main/div[2]/div[4]/div[3]/div/div[1]/div/div[1]/ul")
+                    options = current_page_list.find_elements(by=By. TAG_NAME, value="li")
+
+                    for headline in options:
+                        headline_text = headline.text.split("\n")
+                        if "HOURS" in headline_text[0]:
+                            post_time = now-datetime.timedelta(hours=int(headline_text[0].split(" ")[0]))
+                            headline_text[0] = post_time.strftime("%m/%d/%Y")
+                        elif "DAY" in headline_text[0]:
+                            post_time = now-datetime.timedelta(days=int(headline_text[0].split(" ")[0]))
+                            headline_text[0] = post_time.strftime("%m/%d/%Y")
+                        elif "MIN" in headline_text[0]:
+                            post_time = now-datetime.timedelta(minutes=int(headline_text[0].split(" ")[0]))
+                            headline_text[0] = post_time.strftime("%m/%d/%Y")
+                        elif "HOUR" in headline_text[0]:
+                            post_time = now-datetime.timedelta(hours=int(headline_text[0].split(" ")[0]))
+                            headline_text[0] = post_time.strftime("%m/%d/%Y")
+                        else:
+                            post_time = headline_text[0].split(" ")
+                            post_time_full = str(DATES[post_time[0]])+"/"
+                            post_time_full += str(post_time[1]).replace(",","")+"/"
+                            post_time_full += str(post_time[2])
+                            headline_text[0] = post_time_full
+
+                        if len(headline_text) > 2:
+                            temp_headline = headline_text[1]
+                            for element in range(len(headline_text)-2):
+                                temp_headline += " "+headline_text[i+2]
+                            temp_date = headline_text[0]
+                            headline_text = [temp_date, temp_headline]
+
+
+                        
+                        self.headlines.append(headline_text)
+                    
+                    break
+
+                except:
+                    attempts += 1
+
             # driver.find_element_by_class_name("pagination__next").click()
-            next_tab_button = driver.find_element_by_xpath("/html/body/div[3]/div/main/div[2]/div[4]/div[3]/div/div[1]/div/div[1]/div[3]/button[2]")
+            next_tab_button = driver.find_element(by=By.XPATH, value="/html/body/div[3]/div/main/div[2]/div[4]/div[3]/div/div[1]/div/div[1]/div[3]/button[2]")
             driver.execute_script("arguments[0].click();", next_tab_button)
 
         if save:
@@ -112,11 +138,14 @@ class Stock:
 
         self.headlines["Date"] = pd.to_datetime(self.headlines["Date"])
         self.headlines["Sentiment"] = np.nan
+        sentiment = []
 
         for index, row in self.headlines.iterrows():
             sid = SentimentIntensityAnalyzer()
             ss = sid.polarity_scores(row["Headline"])
-            self.headlines["Sentiment"][index] = ss["compound"]
+            sentiment.append(ss["compound"])
+        
+        self.headlines["Sentiment"] = sentiment
 
         self.sentiment = self.headlines[["Date","Sentiment"]]
         self.sentiment = self.sentiment.groupby("Date").mean()
