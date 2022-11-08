@@ -1,0 +1,6 @@
+yfinance
+pandas
+selenium
+nltk
+numpy
+finta
