@@ -1,10 +1,10 @@
 # %%
+import datetime
+import time
 import yfinance as yf
 import pandas as pd
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-import datetime
-import time
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import numpy as np
 import finta as TA

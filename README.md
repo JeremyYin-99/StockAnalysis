@@ -11,7 +11,7 @@ Next, download nltk's labeled word list. This can be done by going to the termin
 
 <li>python<li\>
 <li>import nltk<li\>
-<li>nltk.download()<li\>
+<li>nltk.download("all")<li\>
 
 
 This will open up a window and download may take a while
