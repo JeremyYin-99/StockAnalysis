@@ -274,6 +274,17 @@ class Stock:
         self.analyst = df
         return self.analyst
 
+    def analyst_recommendation(self):
+        try:
+            self.analyst = pd.read_csv(pd.read_csv("analysts/{}.csv".format(self.ticker), index_col=None))
+
+        except:
+            self.scrape_analyst()
+
+        self.analyst["Date"] = pd.to_datetime(self.analyst["Date"])
+
+        # quantify recommendations
+        pass
 
     def headline_accuracy(self):
         # check headline accuracy
