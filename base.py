@@ -67,6 +67,7 @@ class Stock:
         OBV (grad-, grad+)
         DMI (DMI-, DMI+) ->
         ADX (25-, 25+) (50-,50+)
+        SMA
         '''
 
         # Calculate RSI and set up bounds
@@ -218,6 +219,17 @@ class Stock:
 
     def update_headlines(self):
         # update the headlines without needing to rescrape the whole thing
+        try:
+            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
+        except:
+            print('No local data to update')
+            self.scrape_news(True)
+            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
+        
+        
+            
+
+            
         pass
 
     def scrape_analyst(self):
@@ -232,7 +244,17 @@ class Stock:
         attempt = 0
         while attempt < 20:
             try:
-                time.sleep(0.5)
+                time.sleep(0.25)
+                attempt1 = 0
+                while attempt1 < 3:
+                    try:
+                        time.sleep(0.25)
+                        close_popup = driver.find_element(by=By.XPATH, value= '//*[@id="myLightboxContainer"]/section/button[1]')
+                        driver.execute_script("arguments[0].click();", close_popup)
+                        break
+                            
+                    except:
+                        attempt1 += 1
 
                 # scroll to the bottem because the site is picky
                 driver.execute_script("window.scrollTo(0,document.body.scrollHeight)")
@@ -248,16 +270,6 @@ class Stock:
             except:
                 attempt += 1
 
-        attempt = 0
-        while attempt < 5:
-            try:
-                time.sleep(0.5)
-                close_popup = driver.find_element(by=By.XPATH, value= '//*[@id="myLightboxContainer"]/section/button[1]')
-                driver.execute_script("arguments[0].click();", close_popup)
-                break
-                    
-            except:
-                attempt += 1
         
         attempt = 0
         while attempt < 20:
@@ -284,6 +296,7 @@ class Stock:
             self.analyst.append(to_append)
         
         df = pd.DataFrame(self.analyst[1:], columns=self.analyst[0])
+        df.Recommendation = df.Recommendation.str.strip()
         df.to_csv("analysts/{}.csv".format(self.ticker), index=False)
 
         self.analyst = df
