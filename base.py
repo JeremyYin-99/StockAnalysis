@@ -8,6 +8,10 @@ from selenium.webdriver.common.by import By
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import numpy as np
 import finta as TA
+import matplotlib.pyplot as plt
+import matplotlib.collections as collections
+import matplotlib.dates as mdates
+import os
 
 # list of interested tickers
 TICKER_LIST = ["aapl","goog","ko","mmm","msft","nee","noc","ntr","pfe","pnc","pypl","sbac","slb"]
@@ -17,6 +21,12 @@ NEWS_URL = "https://www.nasdaq.com/market-activity/stocks/{}/news-headlines"
 
 # url for yahoo finance
 ANALYST_URL = "https://finance.yahoo.com/quote/{}/analysis?p={}"
+
+# pathname
+mypath = os.getcwd()
+
+# analysis periods
+periods = [1,3,7,14,21,28]
 
 # kinda lazy so set up a simple date conversion for month str to int
 DATES = {
@@ -66,7 +76,7 @@ class Stock:
         RSI (30,70)
         OBV (grad-, grad+)
         DMI (DMI-, DMI+) ->
-        ADX (25-, 25+) (50-,50+)
+        ADX (25, 50, 75)
         SMA
         '''
 
@@ -92,14 +102,30 @@ class Stock:
         print("Calculating DMI")
         self.dmi = TA.TA.DMI(self.price_history_lower)
         self.dmi = self.dmi.dropna()
-        self.dmi["bounds"] = 0
-        self.dmi.loc[self.dmi["DI+"] > self.dmi["DI-"], "bounds"] = 1
-        self.dmi.loc[self.dmi["DI+"] < self.dmi["DI-"], "bounds"] = -1
+        self.dmi["dmi_bounds"] = 0
+        self.dmi.loc[self.dmi["DI+"] > self.dmi["DI-"], "dmi_bounds"] = 1
+        self.dmi.loc[self.dmi["DI+"] < self.dmi["DI-"], "dmi_bounds"] = -1
 
         # Calculate ADX and set up bounds
         print("Calculating ADX")
         self.adx = TA.TA.ADX(self.price_history_lower).to_frame()
+        self.adx = pd.merge(self.dmi, self.adx, 'outer', left_index=True, right_index=True)
         self.adx = self.adx.dropna()
+        self.adx['bounds'] = 0
+        self.adx.loc[(self.adx['14 period ADX.']>25) & (self.adx['dmi_bounds'] == 1) , 'bounds'] = 1
+        self.adx.loc[(self.adx['14 period ADX.']>25) & (self.adx['dmi_bounds'] == -1) , 'bounds'] = -1
+        self.adx.loc[(self.adx['14 period ADX.']>50) & (self.adx['dmi_bounds'] == 1) , 'bounds'] = 2
+        self.adx.loc[(self.adx['14 period ADX.']>50) & (self.adx['dmi_bounds'] == -1) , 'bounds'] = -2
+        self.adx.loc[(self.adx['14 period ADX.']>75) & (self.adx['dmi_bounds'] == 1) , 'bounds'] = 3
+        self.adx.loc[(self.adx['14 period ADX.']>75) & (self.adx['dmi_bounds'] == -1) , 'bounds'] = -3
+        
+        # Calculate SMA and set up bounds
+        
+        
+        # run analysis
+        # analysis for analysts'
+        print('Running accuracy analysis for analysts')
+        self.analyst_accuracy()
 
 
     def scrape_news(self, save=True):
@@ -310,9 +336,53 @@ class Stock:
             self.scrape_analyst()
 
         self.analyst["Date"] = pd.to_datetime(self.analyst["Date"])
-
+        self.analyst["Value"] = 0
+        
         # quantify recommendations
-        pass
+        # maintaining
+        self.analyst.loc[self.analyst["Recommendation"] == 'to Buy', 'Value'] = 1
+        self.analyst.loc[self.analyst["Recommendation"] == 'to Outperform', 'Value'] = 1
+        self.analyst.loc[self.analyst["Recommendation"] == 'to Overweight', 'Value'] = 1     
+        
+        self.analyst.loc[self.analyst["Recommendation"] == 'to Sell', 'Value'] = -1
+        self.analyst.loc[self.analyst["Recommendation"] == 'to Underperform', 'Value'] = -1
+        self.analyst.loc[self.analyst["Recommendation"] == 'to Underweight', 'Value'] = -1
+        
+        # change to 1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Hold to Buy', 'Value'] = 1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Peer Perform to Outperform', 'Value'] = 1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Neutral to Overweight', 'Value'] = 1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Equal-Weight to Overweight', 'Value'] = 1
+        
+        # change to 0
+        self.analyst.loc[self.analyst["Recommendation"] == 'Buy to Hold', 'Value'] = 0
+        self.analyst.loc[self.analyst["Recommendation"] == 'Outperform to Peer Perform', 'Value'] = 0
+        self.analyst.loc[self.analyst["Recommendation"] == 'Overweight to Neutral', 'Value'] = 0
+        self.analyst.loc[self.analyst["Recommendation"] == 'Overweight to Equal-Weight', 'Value'] = 0
+        
+        self.analyst.loc[self.analyst["Recommendation"] == 'Sell to Hold', 'Value'] = 0
+        self.analyst.loc[self.analyst["Recommendation"] == 'Underperform to Peer Perform', 'Value'] = 0
+        self.analyst.loc[self.analyst["Recommendation"] == 'Underweight to Neutral', 'Value'] = 0
+        self.analyst.loc[self.analyst["Recommendation"] == 'Underweight to Equal-Weight', 'Value'] = 0
+        
+        # change to -1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Hold to Sell', 'Value'] = -1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Peer Perform to Underperform', 'Value'] = -1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Neutral to Underweight', 'Value'] = -1
+        self.analyst.loc[self.analyst["Recommendation"] == 'Equal-Weight to Underweight', 'Value'] = -1
+        
+        self.analyst_stripped = self.analyst[['Date','Value']]
+        self.analyst_stripped = self.analyst_stripped.groupby('Date').mean()
+        self.analyst_stripped.loc[self.analyst_stripped.Value < 0, 'Value'] = -1
+        self.analyst_stripped.loc[self.analyst_stripped.Value > 0, 'Value'] = 1
+        
+        self.analyst_stripped = pd.merge(self.analyst_stripped, self.price_history[['High','Low','Close']], how='outer', left_index=True, right_index=True)
+        self.analyst_stripped.Value.iloc[0] = -999
+        self.analyst_stripped.Value = self.analyst_stripped.Value.fillna(method='ffill')
+        
+        self.analyst_stripped['Value'] = pd.to_numeric(self.analyst_stripped['Value'], downcast='integer')
+
+        return self.analyst_stripped
 
     def headline_accuracy(self):
         # check headline accuracy
@@ -324,7 +394,138 @@ class Stock:
 
     def analyst_accuracy(self):
         # check analyst accuracy
-        pass
+        self.analyst_pure = self.analyst[['Date','Value']]
+        self.analyst_pure = self.analyst_pure.groupby('Date').mean()
+        self.analyst_pure.loc[self.analyst_pure.Value < 0, 'Value'] = -1
+        self.analyst_pure.loc[self.analyst_pure.Value > 0, 'Value'] = 1
+        self.analyst_pure = pd.merge(self.analyst_pure, self.price_history[['High','Low','Close']], how='outer', left_index=True, right_index=True)
+        
+        time_periods = ['High','Low','Close']
+        for days in periods:
+            for period in time_periods:
+                self.analyst_pure['{}-day-{}'.format(days, period)] = self.analyst_pure[period].shift(-days) - self.analyst_pure[period]
+        
+        self.analyst_pure = self.analyst_pure.dropna()
+        
+        
+        
+        inxval = mdates.date2num(self.analyst_stripped.index.to_pydatetime())
+        fig1, ax = plt.subplots()
+        
+        ax.set_title('Analyst analysis for {}'.format(self.ticker))
+        
+        # ax.plot(self.price_history.index, self.price_history.High)
+        # ax.plot(self.price_history.index, self.price_history.Low)
+        ax.plot(self.price_history.index, self.price_history.Close)
+        
+        collection1 = collections.BrokenBarHCollection.span_where(
+            inxval, 0,
+            self.price_history.High.max(), self.analyst_stripped.Value == 1,
+            facecolor='g', alpha=0.5
+        )
+        ax.add_collection(collection1)
+        
+        collection2 = collections.BrokenBarHCollection.span_where(
+            inxval, 0,
+            self.price_history.High.max(), self.analyst_stripped.Value == -1,
+            facecolor='r', alpha=0.5
+        )
+        ax.add_collection(collection2)
+        
+        collection3 = collections.BrokenBarHCollection.span_where(
+            inxval, 0,
+            self.price_history.High.max(), self.analyst_stripped.Value == -999,
+            facecolor='grey', alpha=0.25
+        )
+        ax.add_collection(collection3)
+        try:
+            fig1.savefig('figs/{}/analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
+        except:
+            os.mkdir(mypath+'/figs/{}'.format(self.ticker))
+            fig1.savefig('figs/{}/analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
+        
+        fig1.show()
+        
+        # positive analysis
+        
+        fig2, ax2 = plt.subplots()
+        
+        self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
+                          ].loc[self.analyst_pure.Value==1].plot(kind='line', 
+                                                                subplots=True, 
+                                                                lw=0.5,
+                                                                layout=(3,1),
+                                                                title='Positive Analysis for {}'.format(self.ticker),
+                                                                legend=True,
+                                                                ax=ax2)
+                          
+        fig2.tight_layout()
+                          
+        fig2.savefig('figs/{}/positive_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
+        fig2.show()
+        
+        # neutral analysis
+        
+        fig3, ax3 = plt.subplots()
+        
+        self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
+                          ].loc[self.analyst_pure.Value==0].plot(kind='line', 
+                                                                subplots=True, 
+                                                                lw=0.5,
+                                                                layout=(3,1),
+                                                                title='Neutral Analysis for {}'.format(self.ticker),
+                                                                legend=True,
+                                                                ax=ax3)
+        fig3.tight_layout()                  
+        fig3.savefig('figs/{}/neutral_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
+        fig3.show()
+        
+        # negative analysis
+        
+        fig4, ax4 = plt.subplots()
+
+        
+        self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
+                          ].loc[self.analyst_pure.Value==-1].plot(kind='line', 
+                                                                subplots=True, 
+                                                                lw=0.5,
+                                                                layout=(3,1),
+                                                                title='Negative Analysis for {}'.format(self.ticker),
+                                                                legend=True,
+                                                                ax=ax4)
+        fig4.tight_layout()                  
+        fig4.savefig('figs/{}/negitive_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
+        fig4.show()
+        
+        Value_list = [
+            self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
+                          ].loc[self.analyst_pure.Value==1].mean(),
+            self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
+                          ].loc[self.analyst_pure.Value==0].mean(),
+            self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
+                          ].loc[self.analyst_pure.Value==-1].mean()
+        ]
+
+        axis_list = [
+            ['Positive-7-day-Close','Positive-14-day-Close','Positive-21-day-Close'],
+            ['Neutral-7-day-Close','Neutral-14-day-Close','Neutral-21-day-Close'],
+            ['Negative-7-day-Close','Negative-14-day-Close','Negative-21-day-Close']
+        ]
+
+        fig5, ax5 = plt.subplots(3,1, figsize=(5,15))
+        for i in range(len(Value_list)):
+            ax5[i].bar(axis_list[i], Value_list[i])
+            ax5[i].tick_params('x', labelrotation=45)
+            
+            
+        ax5[0].set_title('Mean accuracy for {}'.format(self.ticker))
+        
+        
+        fig5.tight_layout(pad=1)
+        fig5.savefig('figs/{}/mean_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
+        fig5.show()
+        
+        
 
     def generate_report(self):
         # generate a report of the data
