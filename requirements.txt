@@ -4,3 +4,5 @@ selenium
 nltk
 numpy
 finta
+matplotlib
+python-docx

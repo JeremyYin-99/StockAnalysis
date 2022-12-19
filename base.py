@@ -4,6 +4,8 @@ import time
 import yfinance as yf
 import pandas as pd
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 import numpy as np
@@ -12,6 +14,12 @@ import matplotlib.pyplot as plt
 import matplotlib.collections as collections
 import matplotlib.dates as mdates
 import os
+import docx
+from docx.shared import Inches
+import gc
+import sys
+
+
 
 # list of interested tickers
 TICKER_LIST = ["aapl","goog","ko","mmm","msft","nee","noc","ntr","pfe","pnc","pypl","sbac","slb"]
@@ -44,16 +52,47 @@ DATES = {
     "DEC":"12"
 }
 
+DPI = 600
+
+# make directory for figures if it isnt made
+if os.path.isdir(mypath+'/figs'):
+    pass
+else:
+    os.mkdir(mypath+'/figs')
+
 class Stock:
-    def __init__(self, ticker) -> None:
+    def __init__(self, ticker, market_time='Close') -> None:
         # initalize the given ticker name
         self.ticker = ticker
+        self.market_time = market_time
         print("Initializing ticker {}".format(self.ticker))
+        
+        # initialize variable for random data to be stored
+        self.data = {
+            'Analysts':{
+                
+            },
+            'Headlines':{
+                
+            },
+            'TA':{
+                
+            }
+        }
+        
+        # Check if dir exist, Otherwise make it
+        if os.path.isdir(mypath+'/figs/{}'.format(self.ticker)):
+            pass
+        else:
+            os.mkdir(mypath+'/figs/{}'.format(self.ticker))
 
         # use yfinance to get historical price/volume data
         print("Gathering price and volume history for {}".format(self.ticker))
         self.stock = yf.Ticker(self.ticker)
         self.price_history = self.stock.history(period="max")
+        
+        # Love new updates... this fixes localized datetime
+        self.price_history.index = self.price_history.index.tz_localize(None)
 
         # FinTa requires the column names to be in lower case so recast the column names
         self.price_history_lower = self.price_history.copy()
@@ -119,15 +158,24 @@ class Stock:
         self.adx.loc[(self.adx['14 period ADX.']>75) & (self.adx['dmi_bounds'] == 1) , 'bounds'] = 3
         self.adx.loc[(self.adx['14 period ADX.']>75) & (self.adx['dmi_bounds'] == -1) , 'bounds'] = -3
         
-        # Calculate SMA and set up bounds
-        
-        
         # run analysis
         # analysis for analysts'
         print('Running accuracy analysis for analysts')
         self.analyst_accuracy()
+        
+        # run TA
+        print('Running accuracy anaysis for TAs')
+        self.TA_accuracy()
+        
+        print('Running accuracy analysis for headlines')
+        self.headline_accuracy()
+        
+        print('Generating report')
+        self.generate_report()
 
+############### END of __init__ ##################################
 
+############### Scraping Functions ###############################
     def scrape_news(self, save=True):
         # get current time to help identify the date of the article
         # this is mostly an edge case for articles written within 24 hrs
@@ -135,7 +183,7 @@ class Stock:
         url = NEWS_URL.format(self.ticker)
 
         # initialize selenium webdriver and open page
-        driver = webdriver.Chrome("driver/chromedriver")
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
         driver.get(url)
 
         # try/except is mostly for my slow internet. It will keep trying 20 times or until it works
@@ -215,56 +263,14 @@ class Stock:
         # set data to self
         self.headlines = df
         return self.headlines
-
-    def sentiment_analysis(self):
-        # check if headlines have been scraped
-        try:
-            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
-        except:
-            self.scrape_news(True)
-            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
-
-        # convert the date into a datetime format/variable/type
-        self.headlines["Date"] = pd.to_datetime(self.headlines["Date"])
-        self.headlines["Sentiment"] = np.nan
-        sentiment = []
-
-        # iterate through all of the headlines and score them
-        for index, row in self.headlines.iterrows():
-            sid = SentimentIntensityAnalyzer()
-            ss = sid.polarity_scores(row["Headline"])
-            sentiment.append(ss["compound"])
-        
-        self.headlines["Sentiment"] = sentiment
-
-        # group the headlines by date and then take the mean to find average score per day
-        self.sentiment = self.headlines[["Date","Sentiment"]]
-        self.sentiment = self.sentiment.groupby("Date").mean()
-        
-        return self.sentiment
-
-    def update_headlines(self):
-        # update the headlines without needing to rescrape the whole thing
-        try:
-            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
-        except:
-            print('No local data to update')
-            self.scrape_news(True)
-            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
-        
-        
-            
-
-            
-        pass
-
+    
     def scrape_analyst(self):
         # scrape analyst reccomendations from yahoo finance's webpage
         self.analyst = [["Change","Analyst","Recommendation","Date"]]
 
         url = ANALYST_URL.format(self.ticker, self.ticker)
 
-        driver = webdriver.Chrome("driver/chromedriver")
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
         driver.get(url)
 
         attempt = 0
@@ -327,6 +333,53 @@ class Stock:
 
         self.analyst = df
         return self.analyst
+    
+############### END of Scraping Functions ###############################
+
+############### Run Analysis on Stuff to get Bounds ###############################
+    def sentiment_analysis(self):
+        # check if headlines have been scraped
+        try:
+            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
+        except:
+            self.scrape_news(True)
+            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
+
+        # convert the date into a datetime format/variable/type
+        self.headlines["Date"] = pd.to_datetime(self.headlines["Date"])
+        self.headlines["Sentiment"] = np.nan
+        sentiment = []
+
+        # iterate through all of the headlines and score them
+        for index, row in self.headlines.iterrows():
+            sid = SentimentIntensityAnalyzer()
+            ss = sid.polarity_scores(row["Headline"])
+            sentiment.append(ss["compound"])
+        
+        self.headlines["Sentiment"] = sentiment
+        
+        self.data['Headlines']['Best_Headline'] = self.headlines[
+            self.headlines.Sentiment == self.headlines.Sentiment.max()
+        ]
+        self.data['Headlines']['Worst_Headline'] = self.headlines[
+            self.headlines.Sentiment == self.headlines.Sentiment.min()
+        ]
+
+        # group the headlines by date and then take the mean to find average score per day
+        self.sentiment = self.headlines[["Date","Sentiment"]]
+        self.sentiment = self.sentiment.groupby("Date").mean()
+        
+        self.sentiment.index = pd.to_datetime(self.sentiment.index)
+        self.sentiment["Value"] = 0
+        
+        self.sentiment.loc[self.sentiment['Sentiment'] > 0, 'Value'] = 1
+        self.sentiment.loc[self.sentiment['Sentiment'] < 0, 'Value'] = -1
+        
+        self.sentiment = pd.merge(self.sentiment, self.price_history[['High','Low','Close']], how='outer', left_index=True, right_index=True)
+        self.sentiment.Value.iloc[0] = -999
+        self.sentiment.Value = self.sentiment.Value.fillna(method='ffill')
+        
+        return self.sentiment
 
     def analyst_recommendation(self):
         try:
@@ -384,152 +437,357 @@ class Stock:
 
         return self.analyst_stripped
 
-    def headline_accuracy(self):
-        # check headline accuracy
+############### END of Analysis ###############################
+
+############### Consider Updating over rescraping ###############################
+    
+    def update_headlines(self):
+        # update the headlines without needing to rescrape the whole thing
+        try:
+            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
+        except:
+            print('No local data to update')
+            self.scrape_news(True)
+            self.headlines = pd.read_csv("headlines/{}.csv".format(self.ticker), index_col=None)
+        
+        
+            
+
+            
         pass
 
+############### Accuracy Functions (Pretty much plotting) ###############################
+
+    def headline_accuracy(self):
+        # check headline accuracy
+        self.subplot_total(
+            self.sentiment, 'Value',[-1,1,-999],[0.7,0.7,0.25],['r','g','grey'],
+            'figs/{}/headline_accuracy_{}.png'.format(self.ticker,self.ticker),
+            'Headline Analysis for {}'.format(self.ticker)
+        )
+        
+        self.subplot_years(
+            self.sentiment, 'Value',[-1,1,-999],[0.7,0.7,0.25],['r','g','grey'],
+            'figs/{}/headline_accuracy_years_{}.png'.format(self.ticker,self.ticker),
+            'Annual Headline Analysis for {}'.format(self.ticker)
+        )
+        
+        self.data['Headlines']['Analysis'] = self.plotting_shift(
+            self.sentiment, 'Value', [-1,1], ['Negative Headline Analysis','Positive Headline Analysis'],
+            [
+                'figs/{}/headline_accuracy_negative_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/headline_accuracy_positive_{}.png'.format(self.ticker,self.ticker),
+            ]
+        )
+        
     def TA_accuracy(self):
         # check TA accuracy
-        pass
+        
+        #############################
+        # RSI
+        self.subplot_total(
+            self.rsi, 'bounds',[-1,1],[0.7,0.7],['r','g'],
+            'figs/{}/RSI_accuracy_{}.png'.format(self.ticker,self.ticker),
+            'RSI Analysis for {}'.format(self.ticker)
+        )
+        self.subplot_years(
+            self.rsi, 'bounds',[-1,1],[0.7,0.7],['r','g'],
+            'figs/{}/RSI_accuracy_years_{}.png'.format(self.ticker,self.ticker),
+            'Annual RSI Analysis for {}'.format(self.ticker)
+        )
+        
+        self.data['TA']['RSI'] = self.plotting_shift(
+            self.rsi, 'bounds', [-1,1], ['Negative RSI Analysis','Positive RSI Analysis'],
+            [
+                'figs/{}/RSI_accuracy_negative_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/RSI_accuracy_positive_{}.png'.format(self.ticker,self.ticker),
+            ]
+        )
+        
+        #############################
+        # OBV
+        self.subplot_total(
+            self.obv, 'bounds',[-1,1],[0.7,0.7],['r','g'],
+            'figs/{}/OBV_accuracy_{}.png'.format(self.ticker,self.ticker),
+            'OBV Analysis for {}'.format(self.ticker)
+        )
+        
+        self.subplot_years(
+            self.obv, 'bounds',[-1,1],[0.7,0.7],['r','g'],
+            'figs/{}/OBV_accuracy_years_{}.png'.format(self.ticker,self.ticker),
+            'Annual OBV Analysis for {}'.format(self.ticker)
+        )
+        self.data['TA']['OBV'] = self.plotting_shift(
+            self.obv, 'bounds', [-1,1], ['Negative OBV Analysis','Positive OBV Analysis'],
+            [
+                'figs/{}/OBV_accuracy_negative_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/OBV_accuracy_positive_{}.png'.format(self.ticker,self.ticker),
+            ]
+        )
+        
+        #############################
+        # ADX
+        self.subplot_total(
+            self.adx, 'bounds',[-3,-2,-1,1,2,3],[0.8,0.6,0.4,0.4,0.6,0.8],['r','r','r','g','g','g'],
+            'figs/{}/ADX_accuracy_{}.png'.format(self.ticker,self.ticker),
+            'ADX Analysis for {}'.format(self.ticker)
+        )
+        
+        self.subplot_years(
+            self.adx, 'bounds',[-3,-2,-1,1,2,3],[0.8,0.6,0.4,0.4,0.6,0.8],['r','r','r','g','g','g'],
+            'figs/{}/ADX_accuracy_years_{}.png'.format(self.ticker,self.ticker),
+            'Annual ADX Analysis for {}'.format(self.ticker)
+        )
+        
+        self.data['TA']['ADX'] = self.plotting_shift(
+            self.adx, 'bounds', [-3,-2,-1,1,2,3], 
+            ['Negative ADX Analysis: -3','Negative ADX Analysis: -2','Negative ADX Analysis: -1',
+             'Positive ADX Analysis: 1','Positive ADX Analysis: 2','Positive ADX Analysis: 3'],
+            [
+                'figs/{}/ADX_accuracy_negative_-3_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/ADX_accuracy_negative_-2_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/ADX_accuracy_negative_-1_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/ADX_accuracy_positive_1_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/ADX_accuracy_positive_2_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/ADX_accuracy_positive_3_{}.png'.format(self.ticker,self.ticker),
+            ]
+        )
+        
 
     def analyst_accuracy(self):
         # check analyst accuracy
-        self.analyst_pure = self.analyst[['Date','Value']]
-        self.analyst_pure = self.analyst_pure.groupby('Date').mean()
-        self.analyst_pure.loc[self.analyst_pure.Value < 0, 'Value'] = -1
-        self.analyst_pure.loc[self.analyst_pure.Value > 0, 'Value'] = 1
-        self.analyst_pure = pd.merge(self.analyst_pure, self.price_history[['High','Low','Close']], how='outer', left_index=True, right_index=True)
+        self.subplot_total(
+            self.analyst_stripped, 'Value',[-1,1,-999],[0.7,0.7,0.25],['r','g','grey'],
+            'figs/{}/analyst_accuracy_{}.png'.format(self.ticker,self.ticker),
+            'Analyst Analysis for {}'.format(self.ticker)
+        )
         
-        time_periods = ['High','Low','Close']
+        self.subplot_years(
+            self.analyst_stripped, 'Value',[-1,1,-999],[0.7,0.7,0.25],['r','g','grey'],
+            'figs/{}/analyst_accuracy_years_{}.png'.format(self.ticker,self.ticker),
+            'Annual Analyst Analysis for {}'.format(self.ticker)
+        )
+        
+        self.data['Analysts']['Analysis'] = self.plotting_shift(
+            self.analyst_stripped, 'Value', [-1,1], ['Negative Analyst Analysis','Positive Analyst Analysis'],
+            [
+                'figs/{}/analyst_accuracy_negative_{}.png'.format(self.ticker,self.ticker),
+                'figs/{}/analyst_accuracy_positive_{}.png'.format(self.ticker,self.ticker),
+            ]
+        )
+
+############### END of Accuracy Functions ###############################   
+
+    def subplot_years(self, df, bounds_name, bounds_values, alpha_values, color, name, title):
+        beginning = df.index[0].year
+        end = df.index[-1].year
+        
+        # capped to fit on a word page
+        total_rows = 10
+        
+        columns = int(round(((end-beginning)/total_rows)+0.5))
+        rows = int(round(((end-beginning)/columns)+0.5))
+        fig, ax = plt.subplots(rows,columns)
+        if (end-beginning) < total_rows:
+            for year in range(end-beginning):
+                ax[year].plot(self.price_history[self.market_time].loc[str(year+beginning):str(year+beginning)])
+                df_slice = df[str(year+beginning):str(year+beginning)]
+                inxval = mdates.date2num(df_slice.index.to_pydatetime())
+                for num in range(len(bounds_values)):
+                    collection = collections.BrokenBarHCollection.span_where(
+                        inxval, 0,
+                        self.price_history.High.loc[str(year+beginning):str(year+beginning)].max(), df_slice[bounds_name] == bounds_values[num],
+                        facecolor=color[num], alpha=alpha_values[num]
+                    )
+                    ax[year].add_collection(collection)
+                    ax[year].tick_params(labelrotation=45)
+                    
+        else:
+            count = 0
+            for col in range(columns):
+                for r in range(rows):
+                    ax[r][col].plot(self.price_history[self.market_time].loc[str(count+beginning):str(count+beginning)])
+                    df_slice = df[str(count+beginning):str(count+beginning)]
+                    inxval = mdates.date2num(df_slice.index.to_pydatetime())
+                    for num in range(len(bounds_values)):
+                        collection = collections.BrokenBarHCollection.span_where(
+                            inxval, 0,
+                            self.price_history.High.loc[str(count+beginning):str(count+beginning)].max(), df_slice[bounds_name] == bounds_values[num],
+                            facecolor=color[num], alpha=alpha_values[num]
+                        )
+                        ax[r][col].add_collection(collection)
+                        ax[r][col].tick_params(labelrotation=45)
+                    count += 1
+                    if count >(end-beginning):
+                        break
+        
+        if columns == 1:
+            fig.set_size_inches(6.5,(end-beginning))
+        else:
+            fig.set_size_inches(6.5,1.5*(end-beginning)/columns)
+        fig.set_dpi(DPI*columns)
+        fig.suptitle(title)
+        fig.tight_layout(pad=1)
+        plt.close(fig)
+        fig.savefig(name)
+        # fig.show()
+            
+    def subplot_total(self, df, bounds_name, bounds_values, 
+                      alpha_values, color, name, title):
+        fig, ax = plt.subplots()
+        inxval = mdates.date2num(df.index.to_pydatetime())
+        ax.plot(self.price_history[self.market_time])
+        for num in range(len(bounds_values)):
+            collection = collections.BrokenBarHCollection.span_where(
+                            inxval, 0,
+                            self.price_history.High.max(), df[bounds_name] == bounds_values[num],
+                            facecolor=color[num], alpha=alpha_values[num]
+            )
+            ax.add_collection(collection)
+        
+        fig.set_dpi(DPI)
+        fig.suptitle(title)
+        fig.tight_layout(pad=1)
+        plt.close(fig)
+        fig.savefig(name)
+        # fig.show()
+        
+    def plotting_shift(self, df, bounds_name, bounds_values,title,path):
+        df_temp = df[bounds_name]
+        df_temp = pd.merge(df_temp, self.price_history[['High','Low','Close']], how='outer', left_index=True, right_index=True)
+        df_temp = df_temp.dropna()
         for days in periods:
-            for period in time_periods:
-                self.analyst_pure['{}-day-{}'.format(days, period)] = self.analyst_pure[period].shift(-days) - self.analyst_pure[period]
-        
-        self.analyst_pure = self.analyst_pure.dropna()
-        
-        
-        
-        inxval = mdates.date2num(self.analyst_stripped.index.to_pydatetime())
-        fig1, ax = plt.subplots()
-        
-        ax.set_title('Analyst analysis for {}'.format(self.ticker))
-        
-        # ax.plot(self.price_history.index, self.price_history.High)
-        # ax.plot(self.price_history.index, self.price_history.Low)
-        ax.plot(self.price_history.index, self.price_history.Close)
-        
-        collection1 = collections.BrokenBarHCollection.span_where(
-            inxval, 0,
-            self.price_history.High.max(), self.analyst_stripped.Value == 1,
-            facecolor='g', alpha=0.5
-        )
-        ax.add_collection(collection1)
-        
-        collection2 = collections.BrokenBarHCollection.span_where(
-            inxval, 0,
-            self.price_history.High.max(), self.analyst_stripped.Value == -1,
-            facecolor='r', alpha=0.5
-        )
-        ax.add_collection(collection2)
-        
-        collection3 = collections.BrokenBarHCollection.span_where(
-            inxval, 0,
-            self.price_history.High.max(), self.analyst_stripped.Value == -999,
-            facecolor='grey', alpha=0.25
-        )
-        ax.add_collection(collection3)
-        try:
-            fig1.savefig('figs/{}/analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
-        except:
-            os.mkdir(mypath+'/figs/{}'.format(self.ticker))
-            fig1.savefig('figs/{}/analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
-        
-        fig1.show()
-        
-        # positive analysis
-        
-        fig2, ax2 = plt.subplots()
-        
-        self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
-                          ].loc[self.analyst_pure.Value==1].plot(kind='line', 
-                                                                subplots=True, 
-                                                                lw=0.5,
-                                                                layout=(3,1),
-                                                                title='Positive Analysis for {}'.format(self.ticker),
-                                                                legend=True,
-                                                                ax=ax2)
-                          
-        fig2.tight_layout()
-                          
-        fig2.savefig('figs/{}/positive_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
-        fig2.show()
-        
-        # neutral analysis
-        
-        fig3, ax3 = plt.subplots()
-        
-        self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
-                          ].loc[self.analyst_pure.Value==0].plot(kind='line', 
-                                                                subplots=True, 
-                                                                lw=0.5,
-                                                                layout=(3,1),
-                                                                title='Neutral Analysis for {}'.format(self.ticker),
-                                                                legend=True,
-                                                                ax=ax3)
-        fig3.tight_layout()                  
-        fig3.savefig('figs/{}/neutral_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
-        fig3.show()
-        
-        # negative analysis
-        
-        fig4, ax4 = plt.subplots()
-
-        
-        self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
-                          ].loc[self.analyst_pure.Value==-1].plot(kind='line', 
-                                                                subplots=True, 
-                                                                lw=0.5,
-                                                                layout=(3,1),
-                                                                title='Negative Analysis for {}'.format(self.ticker),
-                                                                legend=True,
-                                                                ax=ax4)
-        fig4.tight_layout()                  
-        fig4.savefig('figs/{}/negitive_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
-        fig4.show()
-        
-        Value_list = [
-            self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
-                          ].loc[self.analyst_pure.Value==1].mean(),
-            self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
-                          ].loc[self.analyst_pure.Value==0].mean(),
-            self.analyst_pure[['7-day-Close','14-day-Close','21-day-Close']
-                          ].loc[self.analyst_pure.Value==-1].mean()
-        ]
-
-        axis_list = [
-            ['Positive-7-day-Close','Positive-14-day-Close','Positive-21-day-Close'],
-            ['Neutral-7-day-Close','Neutral-14-day-Close','Neutral-21-day-Close'],
-            ['Negative-7-day-Close','Negative-14-day-Close','Negative-21-day-Close']
-        ]
-
-        fig5, ax5 = plt.subplots(3,1, figsize=(5,15))
-        for i in range(len(Value_list)):
-            ax5[i].bar(axis_list[i], Value_list[i])
-            ax5[i].tick_params('x', labelrotation=45)
+            df_temp['{}-day'.format(days)] = df_temp[self.market_time].shift(-days) - df_temp[self.market_time]
+        df_temp = df_temp.dropna()
+        to_return = {}
+        for i in range(len(bounds_values)):
+            fig, ax = plt.subplots(sharex=True)
+            fig.tight_layout()
+            fig.set_size_inches(6.5,9)
+            fig.set_dpi(DPI*2)
+            df_temp[['1-day','3-day','7-day','14-day','21-day','28-day']].loc[
+                df_temp[bounds_name]==bounds_values[i]].plot(
+                kind='line',
+                subplots=True,
+                lw=0.5,
+                title=title[i],
+                legend=True,
+                ax=ax
+            )
+            plt.close(fig)
+            fig.savefig(path[i])
             
+            to_return[str(bounds_values[i])+'_mean'] = df_temp[['1-day','3-day','7-day','14-day','21-day','28-day']].loc[
+                df_temp[bounds_name]==bounds_values[i]].mean()
+            to_return[str(bounds_values[i])+'_min'] = df_temp[['1-day','3-day','7-day','14-day','21-day','28-day']].loc[
+                df_temp[bounds_name]==bounds_values[i]].min()
+            to_return[str(bounds_values[i])+'_max'] = df_temp[['1-day','3-day','7-day','14-day','21-day','28-day']].loc[
+                df_temp[bounds_name]==bounds_values[i]].max()
             
-        ax5[0].set_title('Mean accuracy for {}'.format(self.ticker))
+        return to_return
+    
+    def unwrap_data(self, document, bounds, group, subgroup):
+        num_rows = len(bounds)*3
+        unpacked_data = [self.data[group][subgroup]['{}_min'.format(bounds[0])].index.tolist()]
+        table = document.add_table(1,num_rows+1)
+        table.style = 'LightShading-Accent1'
+        heading_cells = table.rows[0].cells
+        heading_cells[0].text = 'Timeframe'
+        for i in range(len(bounds)):
+            heading_cells[int(i*3+1)].text = '{}_min'.format(bounds[i])
+            heading_cells[int(i*3+2)].text = '{}_mean'.format(bounds[i])
+            heading_cells[int(i*3+3)].text = '{}_max'.format(bounds[i])
+            
+            unpacked_data.append(self.data[group][subgroup]['{}_min'.format(bounds[i])].tolist())
+            unpacked_data.append(self.data[group][subgroup]['{}_mean'.format(bounds[i])].tolist())
+            unpacked_data.append(self.data[group][subgroup]['{}_max'.format(bounds[i])].tolist())
+        
+        for i in range(len(unpacked_data[0])):
+            cells = table.add_row().cells
+            for j in range(len(unpacked_data)):
+                if type(unpacked_data[j][i]) == str:
+                    cells[j].text = unpacked_data[j][i]
+                else:
+                    try:
+                        cells[j].text = str(round(unpacked_data[j][i],2))
+                    except:
+                        cells[j].text = 'NaN'
+                
+        return table
         
         
-        fig5.tight_layout(pad=1)
-        fig5.savefig('figs/{}/mean_analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
-        fig5.show()
-        
-        
+    
+############### Generate Report ###############################
 
     def generate_report(self):
         # generate a report of the data
-        pass
-
+        document = docx.Document()
+        document.add_heading('Automatice Report for {}'.format(self.ticker), 0)
+        
+        # Begin by talking about headline stuff
+        document.add_heading('Analyzing the Headline Accuracy', 1)
+        document.add_picture('figs/{}/Headline_accuracy_{}.png'.format(self.ticker,self.ticker))
+        document.add_picture('figs/{}/Headline_accuracy_years_{}.png'.format(self.ticker,self.ticker),height=Inches(9))
+        
+        document.add_heading('')
+        
+        document.add_heading('A Little Bit More Insight Into the Headlines')
+        document.add_paragraph(
+            'The best headline was"{}" which occured on {} and had a Sentiment Score of {}'.format(
+                self.data['Headlines']['Best_Headline']['Headline'].values[0],
+                self.data['Headlines']['Best_Headline']['Date'].to_string().split(' ')[-1],
+                self.data['Headlines']['Best_Headline']['Sentiment'].values[0],
+            )
+        )
+        document.add_paragraph(
+            'The worst headline was"{}" which occured on {} and had a Sentiment Score of {}'.format(
+                self.data['Headlines']['Worst_Headline']['Headline'].values[0],
+                self.data['Headlines']['Worst_Headline']['Date'].to_string().split(' ')[-1],
+                self.data['Headlines']['Worst_Headline']['Sentiment'].values[0],
+            )
+        )
+        
+        self.unwrap_data(document,[-1,1],'Headlines','Analysis')
+        
+        document.add_page_break()
+        
+        # Next start talking about Technical Indicator stuff
+        document.add_heading('Analyzing the Technical Indicators', 1)
+        document.add_heading('Looking at RSI', 2)
+        document.add_picture('figs/{}/RSI_accuracy_{}.png'.format(self.ticker,self.ticker))
+        document.add_picture('figs/{}/RSI_accuracy_years_{}.png'.format(self.ticker,self.ticker),height=Inches(9))
+        
+        self.unwrap_data(document,[-1,1],'TA','RSI')
+        
+        document.add_heading('Looking at OBV', 2)
+        document.add_picture('figs/{}/OBV_accuracy_{}.png'.format(self.ticker,self.ticker))
+        document.add_picture('figs/{}/OBV_accuracy_years_{}.png'.format(self.ticker,self.ticker),height=Inches(9))
+        self.unwrap_data(document,[-1,1],'TA','OBV')
+        
+        document.add_heading('Looking at ADX', 2)
+        document.add_picture('figs/{}/ADX_accuracy_{}.png'.format(self.ticker,self.ticker))
+        document.add_picture('figs/{}/ADX_accuracy_years_{}.png'.format(self.ticker,self.ticker),height=Inches(9))
+        self.unwrap_data(document,[-2,-1,1,2],'TA','ADX')
+        
+        document.add_page_break()
+        
+        # Finally end by talking about Analyst Agency stuff
+        document.add_heading('Analyzing the Analyst Agencies', 1)
+        document.add_picture('figs/{}/analyst_accuracy_{}.png'.format(self.ticker,self.ticker))
+        document.add_picture('figs/{}/analyst_accuracy_years_{}.png'.format(self.ticker,self.ticker),height=Inches(9))
+        self.unwrap_data(document,[-1,1],'Analysts','Analysis')
+        
+        
+        # Save the document
+        document.save('reports/{}.docx'.format(self.ticker))
 
 # %%
+
+if __name__ == "__main__":
+    tsla = Stock('tsla')
+    # for s in TICKER_LIST:
+    #     t = Stock(s)
+        
+    #     # delete variable otherwise computer dies
+    #     del t
+    #     gc.collect()
