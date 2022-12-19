@@ -784,7 +784,7 @@ class Stock:
 # %%
 
 if __name__ == "__main__":
-    tsla = Stock('tsla')
+    www = Stock('www')
     # for s in TICKER_LIST:
     #     t = Stock(s)
         
